@@ -1,0 +1,741 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usetikzlibrary{shapes,arrows,positioning}
+\pgfplotsset{compat=1.16}
+
+\geometry{
+    a4paper,
+    left=2.5cm,
+    right=2.5cm,
+    top=2.5cm,
+    bottom=2.5cm
+}
+
+\begin{document}
+
+\begin{center}
+\fbox{\parbox{\textwidth}{\centering
+{\Large \textbf{UN ALGORITMO GENETICO PARALLEO PER IL PROBLEMA DELLA PARTIZIONE DEL GRAFO}}
+}}
+\end{center}
+
+\vspace{1em}
+
+\begin{center}
+{\large Samuele Schiavi}\\[0.5em]
+Dipartimento di Fisica\\
+Universit\`a degli Studi di Parma
+\end{center}
+
+\vspace{1em}
+
+\noindent\textbf{Sommario}
+
+Gli algoritmi genetici sono tecniche di ricerca stocastica e ottimizzazione che possono essere utilizzate per un'ampia gamma di applicazioni. Questo articolo affronta l'applicazione degli algoritmi genetici al problema di partizione di grafi. Gli algoritmi genetici standard con popolazioni grandi soffrono di mancanza di efficienza (tempo di esecuzione abbastanza elevato). Viene proposto un algoritmo genetico massicciamente parallelo, un'implementazione su un Supernode di Transputer® e vengono forniti i risultati di vari benchmark.
+
+L'algoritmo parallelo mostra uno speedup superlineare, nel senso che moltiplicando il numero di processori per p, il tempo impiegato per raggiungere una soluzione con un punteggio dato \`e diviso per kp (k>1).
+
+Viene inoltre presentata un'analisi comparativa del nostro approccio con algoritmi di hill-climbing e simulated annealing. Le misure sperimentali mostrano che il nostro algoritmo fornisce risultati migliori sia per quanto riguarda la qualit\`a della soluzione che il tempo necessario per raggiungerla.
+
+\vspace{0.5em}
+
+\noindent\textbf{Parole Chiave}
+
+Architetture parallele a memoria distribuita, Algoritmi genetici, Partizione di grafi, Hill-climbing, Problema di mapping, Simulated annealing, Speedup superlineare.
+
+\section{INTRODUZIONE}
+
+Dato un grafo, il "problema di partizione di grafi" cerca una partizione dei suoi nodi che ottimizzi una certa funzione di costo.
+
+Ci sono numerose applicazioni pratiche di questo problema, per esempio:
+\begin{itemize}
+\item progettazione di V.L.S.I. (Integrazione su Scala Molto Larga) circuiti, dove, dato un insieme di componenti e un insieme di moduli, si vuole posizionare i componenti in modo da minimizzare il numero di connessioni tra moduli, pur preservando un certo equilibrio riguardante il numero di componenti in ogni modulo;
+\item routing in sistemi distribuiti, dove il problema considerato \`e quello di suddividere il componente di rete in cluster pi\`u piccoli in modo che l'overhead di controllo per il routing sia minimizzato;
+\item segmentazione di immagini nel campo della visione artificiale, dove le immagini segmentate sono rappresentate come grafi in cui ogni vertice rappresenta un segmento e ogni arco pesato tra due vertici rappresenta una relazione topologica tra due segmenti dell'immagine;
+\item sistemi di paging di memoria virtuale, dove si vuole distribuire oggetti diversi su pagine di memoria in modo da minimizzare il numero di riferimenti tra oggetti memorizzati in pagine diverse;
+\item mappatura di programmi paralleli su architetture parallele.
+\end{itemize}
+
+In questo laboratorio, siamo particolarmente interessati a quest'ultima applicazione, ovvero il posizionamento dei processi di comunicazione su processori di una macchina parallela a memoria distribuita. Un'indagine sui diversi metodi proposti nella letteratura per affrontare questo problema pu\`o essere trovata in [Talbi90]. Il programma parallelo \`e modellato come un grafo dove i vertici rappresentano i processi, i pesi dei vertici rappresentano i costi di calcolo noti o stimati di questi processi, gli archi rappresentano i collegamenti di comunicazione richiesti tra di essi e i pesi degli archi stimano la quantit\`a relativa di comunicazione necessaria lungo quei collegamenti. Quando il numero di processi supera il numero di elementi di elaborazione disponibili, come di solito \`e il caso nella programmazione massicciamente parallela, il problema di mappatura include il problema di contrazione che \`e equivalente al problema di partizione di grafi trattato in questo articolo.
+
+Il problema di partizione di grafi \`e NP-completo. Di conseguenza, dovrebbero essere usati metodi euristici per affrontarlo. Essi possono trovare soluzioni che sono solo approssimazioni dell'ottimo, ma lo faranno in un tempo ragionevole. I diversi approcci che sono stati proposti per questo problema possono essere divisi in due classi principali. Da un lato, gli algoritmi di ottimizzazione per scopi generali indipendenti dall'applicazione data e, dall'altro lato, gli approcci euristici progettati appositamente per un problema unico. Poich\'e vogliamo evitare lo svantaggio intrinseco degli algoritmi di questa seconda classe (applicabilit\`a piuttosto limitata dovuta alla dipendenza dal problema) la nostra preoccupazione in questo articolo \`e solo la prima classe di algoritmi.
+
+Due tecniche di ottimizzazione ampiamente utilizzate sono l'algoritmo di hill-climbing e il simulated annealing. L'algoritmo di hill-climbing \`e sicuro di trovare il minimo globale solo negli spazi convessi. Altrimenti, il pi\`u delle volte \`e un minimo locale piuttosto che un minimo globale che viene trovato. Il simulated annealing offre un modo per superare questo grande svantaggio dell'hill-climbing ma il prezzo da pagare per farlo \`e un tempo di calcolo importante. Peggio ancora, l'algoritmo di simulated annealing \`e piuttosto di natura sequenziale, la sua parallelizzazione \`e un compito abbastanza difficile.
+
+Possono anche essere considerate tecniche di ottimizzazione pi\`u distribuite. Alcune di esse sono strettamente correlate agli algoritmi di reti neurali (vedi [Ackley87] \& [Peretto90]). Altri, ovvero gli algoritmi genetici (GA) sono considerati in questo articolo. Sono tecniche di ricerca stocastica, introdotte da Holland venti anni fa, ispirate dall'evoluzione biologica delle specie. Lo sviluppo di architetture massicciamente parallele li ha resi molto popolari negli ultimi anni. Sono stati recentemente applicati a problemi di ottimizzazione combinatoria in vari campi, come, per esempio, il problema del commesso viaggiatore, l'ottimizzazione delle connessioni e della connettivit\`a delle reti neurali, e sistemi di classificazione.
+
+Lo scopo di questo articolo \`e provare che il problema di partizione di grafi pu\`o essere risolto abbastanza efficientemente da un algoritmo genetico parallelo.
+
+La struttura dell'articolo \`e la seguente:
+\begin{itemize}
+\item in una prima sezione, diamo una formalizzazione matematica del problema di partizione di grafi e discutiamo alcune istanze di funzioni di costo classiche.
+\item nella sezione successiva, presentiamo estensivamente l'approccio dell'algoritmo genetico al problema di partizione di grafi. Dopo un richiamo dei principi degli algoritmi genetici, mostriamo come possono essere utilizzati per affrontare il problema di partizione di grafi, discutiamo la questione degli algoritmi genetici paralleli e infine esponiamo la soluzione proposta.
+\item la terza e ultima sezione, dopo una presentazione dettagliata dell'implementazione del Supernode, presenta i risultati di diversi benchmark confrontando la velocit\`a o la qualit\`a dei risultati di questo algoritmo date diverse dimensioni di popolazione o un dato numero di processori. Viene anche presentata un'analisi comparativa della soluzione dell'algoritmo genetico con hill-climbing e simulated annealing. Infine, osservazioni conclusive e possibili estensioni di questo lavoro sono proposte.
+\end{itemize}
+
+\section{FORMALIZZAZIONE MATEMATICA DEL PROBLEMA DI PARTIZIONE DI GRAFI}
+
+Dato:
+\begin{itemize}
+\item un grafo non diretto $G = (V,E)$;
+\item un'applicazione $\Omega_1$ da $V$ in $\mathbb{Z}^+$, tale che $\Omega_1(v_i) = w_{1i}$ \`e il peso del vertice $v_i$;
+\item un'applicazione $\Omega_2$ da $E$ in $\mathbb{Z}^+$, tale che $\Omega_2(e_i) = w_{2i}$ \`e il peso dell'arco $e_i$;
+\item e un insieme di vincoli numerici $\Phi = \{\phi_1, \phi_2, ..., \phi_m\}$ su questi pesi;
+\end{itemize}
+
+il problema di partizione di grafi deve trovare una partizione $\Pi$ di $V$ ($\Pi = \{\pi_1, \pi_2, ..., \pi_n\}$) che soddisfi i vincoli $\Phi$.
+
+Un insieme classico e ben studiato $\Phi1$ di vincoli esprime che:
+\begin{itemize}
+\item per ogni sotto-insieme $\pi_i$ di $V$ appartenente alla partizione $\Pi$, la somma dei pesi dei suoi vertici deve essere inferiore a un dato valore $B$
+\begin{equation*}
+\forall\ \pi_i \in \Pi, \quad \sum_{v \in \pi_i} \Omega_1(v) \leq B
+\end{equation*}
+
+\item la somma dei pesi degli archi che vanno da un nodo di $\pi_i$ a un nodo di qualche altro $\pi_j$ deve essere inferiore a un dato valore $C$
+\begin{equation*}
+\sum_{e \in \varepsilon} \Omega_2(e) \leq C
+\end{equation*}
+
+con $\varepsilon = \{ (x,y) / (x,y) \in E\ \&\ x \in \pi_i\ \&\ y \in \pi_j\ \&\ i \neq j \}$
+\end{itemize}
+
+Il problema di partizione di grafi sotto vincoli $\Phi1$ \`e stato dimostrato NP-completo (vedi [Garey79]).
+
+La maggior parte delle applicazioni corrisponde al seguente insieme $\Phi2$ di vincoli dove per ogni sotto-insieme $\pi_i$ di $V$ appartenente alla partizione $\Pi$, il numero di nodi in $\pi_i$ \`e uguale a un dato valore $B_i$
+\begin{equation*}
+\forall\ \pi_i \in \Pi, \quad \sum_{v \in \pi_i} \Omega_1(v) = B_i
+\end{equation*}
+
+con $\forall\ v \in V,\ \Omega_1(v)=1$
+
+\begin{itemize}
+\item il costo totale degli archi che vanno da un $\pi_i$ a un altro $\pi_j$ dovrebbe essere minimo
+\begin{equation*}
+\text{MIN}(\sum_{e \in \varepsilon} \Omega_2(e))
+\end{equation*}
+\end{itemize}
+
+Il problema di partizione di grafi sotto vincoli $\Phi2$ \`e stato anche dimostrato NP-completo (vedi [Hyafil73]).
+
+Per la nostra applicazione, il mapping di programmi paralleli su architetture parallele, dobbiamo considerare il seguente insieme $\Phi3$ di vincoli:
+
+\begin{itemize}
+\item minimizzare la somma dei costi totali di comunicazione tra processori (costo totale degli archi che vanno da un $\pi_i$ a un altro $\pi_j$) e della varianza dei carichi dei diversi processori (varianza del costo dei vertici appartenenti a un dato $\pi_i$)
+\end{itemize}
+
+\begin{equation*}
+\text{MIN}\left(\sum_{e \in \varepsilon} \Omega_2(e) + (K * \frac{\left(\sum_{\pi_i \in \Pi} \left(\sum_{v \in \pi_i} \Omega_1(v)\right)^2\right)}{|\Pi|} - \left(\frac{\sum_{v \in V} \Omega_1(v)}{|\Pi|}\right)^2)\right)
+\end{equation*}
+
+Con $K=0$ l'insieme di vincoli $\Phi3$ si riduce a $\Phi2$. Questo dimostra che il problema di partizione sotto vincoli $\Phi3$ \`e NP-completo.
+
+Per il problema di mapping, $K$ \`e il peso del contributo del costo di comunicazione relativo al bilanciamento del carico totale nel sistema. La scelta di un valore adatto per $K$ dipende dalla conoscenza delle caratteristiche dell'architettura parallela. Valori molto piccoli di $K$ suggerirebbero una soluzione uniprocessore, e valori molto grandi ridurrebbero il problema a uno di scheduling multiprocessore senza costi di comunicazione. L'architettura parallela utilizzata era una rete di transputer e $K=2$ \`e stato scelto.
+
+\section{SOLUZIONE DELL'ALGORITMO GENETICO AL PROBLEMA DI PARTIZIONE DI GRAFI}
+
+\subsection{Principi degli algoritmi genetici e loro applicazione al problema di partizione di grafi}
+
+Gli algoritmi genetici compongono una famiglia molto interessante di algoritmi di ottimizzazione. Il loro principio base \`e abbastanza semplice.
+
+Dato uno spazio di ricerca $\Sigma$ di dimensione $M^N$, dati $M$ simboli, qualsiasi punto di questo spazio pu\`o essere rappresentato da un vettore di $N$ di questi $M$ simboli.
+
+Data una funzione di fitness $F$ da $\Sigma$ in $\Re$ che associa un valore reale a qualsiasi punto di $\Sigma$.
+
+Data un insieme iniziale di vettori, chiamata la popolazione iniziale.
+
+Alcuni operatori genetici vengono utilizzati per generare nuovi punti di $\Sigma$ dati alcuni vecchi in una fase del processo chiamata "riproduzione". Durante questa fase, alcuni punti di $\Sigma$ vengono sostituiti mantenendo fissa la dimensione della popolazione. Il principio fondamentale di GA \`e: "pi\`u adatto un vettore, pi\`u probabile la sua riproduzione". In termini matematici significa che la probabilit\`a $P$ di riproduzione \`e crescente come $F$ aumentava:
+
+\begin{equation*}
+\forall\ \sigma_1, \sigma_2 \in \Sigma, \quad F(\sigma_1) > F(\sigma_2) \Rightarrow P(\sigma_1) > P(\sigma_2)
+\end{equation*}
+
+L'algoritmo genetico standard \`e:
+
+Generare una popolazione di individui casuali.\\
+Mentre nber\_of\_generations $\leq$ max\_nber\_of\_generations\\
+Fare
+\begin{itemize}
+\item \textbf{Valutazione} - assegnare un valore di fitness a ogni individuale.
+\item \textbf{Selezione} - fare un elenco di coppie di individui che probabilmente si accoppieranno, con individui pi\`u adatti elencati pi\`u frequentemente.
+\item \textbf{Riproduzione} - applicare operatori genetici alle coppie selezionate.
+\item \textbf{Sostituzione} - formare una nuova popolazione sostituendo i peggiori individui con i migliori.
+\end{itemize}
+
+Gli operatori genetici pi\`u comuni utilizzati durante la riproduzione sono il crossover e la mutazione. Crossover, dati due vettori, tagliali entrambi nello stesso punto casuale e scambia i vettori cos\`i tagliati (fig.1a). La mutazione \`e semplicemente cambiare un bit (fig.1b). Devono essere definiti due parametri: Pc e Pm. Rappresentano rispettivamente la probabilit\`a di applicazione del crossover e le mutazioni di operatori. Altri operatori genetici possono essere trovati in letteratura. Per esempio, l'operatore di inversione o molte varianti dell'operatore di crossover progettato per domini di problemi specifici.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+% Crossover
+\node at (0,3.5) {\textbf{Genitori}};
+\node at (5,3.5) {\textbf{Discendenti}};
+
+\draw (0,2.5) rectangle (3,3);
+\draw[fill=gray!30] (0,2.5) rectangle (1.5,3);
+\draw[fill=white] (1.5,2.5) rectangle (3,3);
+
+\draw (0,1.8) rectangle (3,2.3);
+\draw[fill=white] (0,1.8) rectangle (1.5,2.3);
+\draw[fill=gray!30] (1.5,1.8) rectangle (3,2.3);
+
+\draw[dashed] (1.5,1.5) -- (1.5,3.3);
+
+\draw[->,thick] (3.2,2.4) -- (4.8,2.4);
+
+\draw (5,2.5) rectangle (8,3);
+\draw[fill=gray!30] (5,2.5) rectangle (6.5,3);
+\draw[fill=gray!30] (6.5,2.5) rectangle (8,3);
+
+\draw (5,1.8) rectangle (8,2.3);
+\draw[fill=white] (5,1.8) rectangle (6.5,2.3);
+\draw[fill=white] (6.5,1.8) rectangle (8,2.3);
+
+\node at (1.5,1.3) {Punto di crossover casuale};
+\node at (4,0.8) {(a) Crossover};
+
+% Mutation
+\begin{scope}[xshift=10cm]
+\node at (0,3.5) {\textbf{Individuo}};
+
+\draw (0,2.5) rectangle (3,3);
+\draw[fill=gray!30] (0,2.5) rectangle (1.2,3);
+\draw[fill=white] (1.2,2.5) rectangle (3,3);
+
+\draw[->,thick] (1.5,2.2) -- (1.5,1.2);
+
+\draw (0,0.8) rectangle (3,1.3);
+\draw[fill=gray!30] (0,0.8) rectangle (1.2,1.3);
+\draw[fill=white] (1.2,0.8) rectangle (1.8,1.3);
+\draw[fill=gray!30] (1.8,0.8) rectangle (2.1,1.3);
+\draw[fill=white] (2.1,0.8) rectangle (3,1.3);
+
+\node at (1.5,0.3) {Mutazione casuale di bit};
+\node at (1.5,-0.2) {(b) Mutazione};
+\end{scope}
+\end{tikzpicture}
+\caption{Operatori genetici.}
+\end{figure}
+
+Per utilizzare l'algoritmo genetico per il problema di partizione di grafi, \`e necessaria la seguente formalizzazione:
+
+Supponiamo di avere un grafo di $N$ nodi da dividere in $M$ sotto-insiemi. Ciascuno di questi sotto-insiemi \`e etichettato da un simbolo (per esempio un numero intero tra 0 e M-1). Una data partizione \`e rappresentata da un vettore $N$ di quei simboli; dove il simbolo $p$ in posizione $q$ significa che il nodo $q$ del grafo \`e nel sotto-insieme $p$.
+
+La funzione di fitness $F$ \`e l'ultima funzione di costo descritta nella sezione II. Usiamo la versione usuale di crossover, ma la mutazione \`e una prova casuale di uno degli $M$ simboli possibili.
+
+\subsection{Un algoritmo genetico parallelo}
+
+Due approcci agli algoritmi genetici paralleli sono stati considerati finora:
+
+\textbf{approccio parallelo standard}: In questo approccio, la valutazione e la riproduzione sono fatte in parallelo. Tuttavia, la selezione \`e ancora fatta sequenzialmente, perch\'e richiederebbe un grafo completamente connesso di individui poich\'e due individui qualsiasi nella popolazione potrebbero essere accoppiati.
+
+\textbf{approccio di decomposizione}: Questo approccio consiste nel dividere la popolazione in sotto-popolazioni di dimensioni uguali. Ogni processore esegue l'algoritmo genetico sulla propria sotto-popolazione, selezionando periodicamente buoni individui da inviare ai suoi vicini e ricevendo periodicamente copie dei "buoni" individui dei vicini per sostituire i "cattivi" nella propria sotto-popolazione. Il vicinato del processore, la frequenza di scambio e il numero di individui scambiati sono parametri regolabili.
+
+Il modello parallelo standard non \`e flessibile nel senso che l'overhead di comunicazione della popolazione cresce come il quadrato della dimensione della popolazione. Pertanto, questo approccio non \`e adatto ad architetture a memoria distribuita, dove la comunicazione ha un grande impatto sulle prestazioni dei programmi paralleli. Nel modello di decomposizione, il parallelismo inerente non \`e completamente sfruttato poich\'e il trattamento delle sotto-popolazioni pu\`o essere ulteriormente decomposto. Questo approccio dovrebbe essere considerato solo quando il numero di processori disponibili \`e inferiore alla dimensione richiesta della popolazione.
+
+Considerando architetture massicciamente parallele con numerosi processori, scegliamo un modello a grana fine, dove la popolazione \`e mappata su un grafo di processori connesso come una griglia, un individuo per processore. Abbiamo una biiezione tra l'insieme di individui e l'insieme di processori. La selezione \`e fatta localmente in un vicinato di ogni individuo. Un'altra versione di questo approccio \`e stata gi\`a proposta in [M\"uhlenbein89], dove ad ogni generazione viene eseguito un algoritmo di hill-climbing per ogni individuo nella popolazione.
+
+La scelta del vicinato \`e il parametro regolabile. Per evitare l'overhead e la complessit\`a degli algoritmi di routing in macchine distribuite parallele, una buona scelta pu\`o essere quella di limitare il vicinato solo agli individui direttamente connessi.
+
+L'algoritmo genetico parallelo proposto \`e:
+
+Generare \emph{in parallelo} una popolazione di individui casuali.\\
+Mentre nber\_of\_generations $\leq$ max\_nber\_of\_generations\\
+Fare
+\begin{itemize}
+\item \textbf{Valutazione} - Valutare \emph{in parallelo} ogni individuo.
+\item \textbf{Selezione} - Ricevere \emph{in parallelo} gli individui provenienti dai suoi vicini.
+\item \textbf{Riproduzione} - Ogni individuo si riproduce \emph{in parallelo} con gli individui precedentemente ricevuti.
+\item \textbf{Sostituzione} - Fare \emph{in parallelo} una selezione dei migliori discendenti locali.
+\end{itemize}
+
+\`E importante notare che queste modifiche del modello standard non causano una degradazione nell'efficienza di ricerca dell'algoritmo genetico standard come mostrato in [Anderson90] e [M\"uhlenbein88].
+
+\section{IMPLEMENTAZIONE DEL SUPERNODE E BENCHMARKING}
+
+\subsection{Implementazione del Supernode}
+
+Il Supernode \`e una macchina vagamente accoppiata, altamente parallela basata su transputer (fig.2). Una delle sue caratteristiche pi\`u importanti \`e la sua capacit\`a di riconfigurare dinamicamente la topologia di rete utilizzando un dispositivo programmabile V1 switch device. Pu\`o passare tra varie configurazioni da 16 a 1024 processori, fornendo da 24 a 1500 Mflops di prestazioni di picco. Per ottenere queste prestazioni, \`e stata adottata una struttura gerarchica. Il componente di base \`e un transputer T800 a 32-bit con microprocessore, memoria on-chip (Floating Point Unit), fornendo 10Mips e 1.5Mflops di prestazioni di picco. La comunicazione tra transputer \`e supportata da collegamenti seriali, bidirezionali, asincroni, point-to-point. Una stazione host Sun viene utilizzata per fornire la connessione tra il processore root e il mondo esterno.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.8]
+% Main SWITCH box
+\draw[thick] (3,2) rectangle (7,6);
+\node at (5,5.5) {\textbf{SWITCH}};
+\node at (5,4.8) {\textbf{CONTROL}};
+\node at (5,4.1) {\small 4 T800's};
+
+% Control Transputer
+\draw[thick] (8,4) circle (1);
+\node at (8,4) {\small CT};
+
+% SN SERVER
+\draw[thick] (10,3) rectangle (12,5);
+\node at (11,4.5) {\small SN};
+\node at (11,3.5) {\small SERVER};
+
+% WT nodes (left side)
+\draw[thick] (-1,5) rectangle (1,6);
+\node at (0,5.5) {\small WT (8N)};
+
+\draw[thick] (-1,3.5) rectangle (1,4.5);
+\node at (0,4) {\small WT (8N)};
+
+% WT nodes (bottom)
+\draw[thick] (2,0) rectangle (4,1);
+\node at (3,0.5) {\small WT (8N)};
+
+\draw[thick] (4.5,0) rectangle (6.5,1);
+\node at (5.5,0.5) {\small WT (8N)};
+
+% Connections
+\draw[->] (1,5.5) -- (3,4.5);
+\draw[->] (1,4) -- (3,3.5);
+\draw[->] (3,1) -- (4.5,2);
+\draw[->] (5.5,1) -- (5,2);
+
+\draw[<->] (7,4) -- (7.2,4);
+\draw[<->] (8.8,4) -- (10,4);
+
+% Labels
+\node[align=left,font=\tiny] at (-2,7) {WT : Working Transputer\\
+SN : A Supernode Basic Module\\
+CT : Control Transputer\\
+SN SERVER : Disk, Memory, Transputer servers};
+
+% Legend box
+\draw[thick,dashed] (9,1) rectangle (13,2.5);
+\node[align=center,font=\tiny] at (11,1.7) {COMMON\\BUS};
+
+\end{tikzpicture}
+\caption{Supernode Parallel Architecture.}
+\end{figure}
+
+L'ambiente di programmazione utilizzato nei nostri esperimenti \`e Parallel C 3L. Una configurazione del network fisico sviluppata nel nostro laboratorio \`e stata utilizzata per ottenere la topologia desiderata dell'architettura.
+
+Assumiamo che ogni individuo nella popolazione risieda su un processore e la comunicazione \`e effettuata mediante passaggio di messaggi. Quanto segue \`e una descrizione pseudo-Occam del processo eseguito in parallelo da ogni processore:
+
+\begin{verbatim}
+SEQ
+   Generate (local_individual)
+   Evaluate (local_individual)
+   While nber_of_generations <= max_nber_of_generations
+      SEQ
+         -- communication phase
+         PAR i=0 FOR nber_of_neighbors
+            PAR
+               neighbor_in[i] ? neighbor_individual[i]
+               neighbor_out[i] ! local_individual
+         -- computation phase
+         PAR i=0 FOR nber_of_neighbors
+            Reproduction(local_individual,
+                        neighbor_individual[i])
+         Replacement
+\end{verbatim}
+
+Ogni riproduzione produce due discendenti. La nostra strategia \`e scegliere casualmente uno dei discendenti. La fase di sostituzione consiste nel sostituire l'individuo locale corrente con il miglior discendente locale prodotto nella fase di riproduzione.
+
+La popolazione \`e posta su un toro. Dati i quattro collegamenti del transputer, ogni individuo ha quattro vicini. Non \`e necessario routing nella rete di processori perch\'e solo i processori direttamente connessi devono scambiare informazioni.
+
+Non consideriamo la migliore soluzione trovata globalmente poich\'e la comunicazione coinvolta nel determinare questa soluzione sarebbe considerevole. Prendiamo solo la migliore soluzione di routing attraverso un "processo spy" posizionato sul "processore root" (vedi fig. 3).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.6]
+% Root processor
+\draw[thick] (-2,5) rectangle (0,6);
+\node at (-1,5.5) {\small root};
+\node at (-1,4.8) {\small processor};
+
+% Host processor  
+\draw[thick] (-2,2) rectangle (0,3);
+\node at (-1,2.5) {\small host};
+\node at (-1,1.8) {\small processor};
+
+% Grid of processors (4x4)
+\foreach \x in {2,4,6,8} {
+    \foreach \y in {2,4,6,8} {
+        \draw[thick] (\x,\y) rectangle (\x+1.5,\y+1.5);
+    }
+}
+
+% Connect root to host
+\draw[<->] (-1,3) -- (-1,5);
+
+% Connect root to grid
+\draw[<->] (0,5.5) -- (2,5.5);
+
+\node at (5,-0.5) {Figura 3\quad Un toro di 16 processori.};
+\end{tikzpicture}
+\end{figure}
+
+\subsection{Variare il numero di processori}
+
+Lo scopo di questo benchmark \`e misurare lo speed-up quando si esegue l'algoritmo genetico parallelo (per una data dimensione di popolazione) su diverse dimensioni di toro di processori.
+
+Usiamo il rapporto di speed-up come metrica per le prestazioni dell'algoritmo genetico parallelo. Il rapporto di speed-up $S$ \`e definito come $S=Ts/Tp$ dove $Ts$ \`e il tempo di esecuzione su un singolo processore e $Tp$ corrisponde al tempo di esecuzione per $p$ processori implementazione. La Figura 4 mostra i risultati ottenuti.
+
+L'algoritmo ha uno speed-up quasi lineare. Ci\`o \`e dovuto al fatto che il costo di comunicazione tra processi \`e relativamente piccolo rispetto al costo di calcolo, ed \`e indipendente dalla dimensione dell'architettura.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=10cm,
+    height=7cm,
+    xlabel={numero di processori},
+    ylabel={speed-up},
+    xmin=0, xmax=70,
+    ymin=0, ymax=70,
+    grid=major,
+    legend pos=north west
+]
+\addplot[mark=triangle*,thick] coordinates {
+    (0,0) (16,16) (32,32) (48,48) (64,64)
+};
+\addlegendentry{speedup lineare}
+
+\addplot[mark=*,thick] coordinates {
+    (0,0) (16,15.5) (32,31) (48,47) (64,63.5)
+};
+\addlegendentry{nostri risultati}
+\end{axis}
+\end{tikzpicture}
+\caption{Speed-up dell'algoritmo parallelo}
+\end{figure}
+
+\subsection{Variare la dimensione della popolazione}
+
+Lo scopo di questo benchmark \`e misurare l'evoluzione della qualit\`a della soluzione quando si esegue l'algoritmo genetico parallelo con diverse dimensioni di popolazione.
+
+La Figura 5 mostra i risultati ottenuti.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=10cm,
+    height=7cm,
+    xlabel={Numero di generazioni},
+    ylabel={Qualit\`a della soluzione},
+    xmin=0, xmax=100,
+    ymin=7, ymax=35,
+    grid=major,
+    legend pos=north east
+]
+\addplot[mark=triangle*,thick] coordinates {
+    (0,33) (25,27) (50,19) (75,15) (100,12)
+};
+\addlegendentry{pop. size=9}
+
+\addplot[mark=*,thick] coordinates {
+    (0,32) (25,24) (50,17) (75,13.5) (100,11)
+};
+\addlegendentry{pop. size=16}
+
+\addplot[mark=square*,thick] coordinates {
+    (0,31) (25,23) (50,16) (75,12.5) (100,10)
+};
+\addlegendentry{pop. size=32}
+
+\addplot[mark=x,thick,mark size=4pt] coordinates {
+    (0,30) (25,21) (50,13) (75,9) (100,7)
+};
+\addlegendentry{pop. size=64}
+\end{axis}
+\end{tikzpicture}
+\caption{Qualit\`a della soluzione in funzione della dimensione della popolazione.}
+\end{figure}
+
+Si noti che dato il problema di partizione di grafi specifico utilizzato (una pipeline di 32 vertici da partizionare in 8 sotto-insiemi) per questo benchmark, la migliore soluzione possibile ottiene un punteggio di 7.
+
+Come previsto, per un dato numero di generazioni, la qualit\`a migliora con un aumento della dimensione della popolazione.
+
+Pu\`o anche accadere che per una popolazione troppo piccola si verifichi una convergenza prematura e che la soluzione ottimale non venga mai raggiunta.
+
+La Figura 5 mostra anche che la maggiore riduzione del costo della partizione si verifica all'inizio. Quindi una qualit\`a moderata del partizionamento pu\`o essere ottenuta molto rapidamente.
+
+\subsection{Tempo per raggiungere una data soluzione}
+
+Lo scopo di questo benchmark \`e studiare lo speed-up per una data qualit\`a della soluzione quando si esegue l'algoritmo genetico parallelo su diverse dimensioni di toro di processori e con diverse dimensioni di popolazioni (entrambe uguali dato che c'\`e un individuo per processore).
+
+La Figura 6 mostra l'influenza del numero di processori (e dimensione della popolazione) sul tempo necessario per raggiungere una soluzione con punteggio 8.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=10cm,
+    height=7cm,
+    xlabel={P/Po},
+    ylabel={To/T},
+    xmin=0, xmax=8,
+    ymin=0, ymax=10,
+    grid=major,
+    legend pos=north west
+]
+\addplot[mark=triangle*,thick] coordinates {
+    (1,1) (2,2) (3,3) (4,4) (5,5) (6,6) (7,7) (8,8)
+};
+\addlegendentry{speedup lineare}
+
+\addplot[mark=*,thick] coordinates {
+    (1,1) (2,2.2) (3,3.5) (4,5) (5,6.2) (6,7.5) (7,8.2) (8,9)
+};
+\addlegendentry{nostri risultati}
+
+\node[align=left,font=\footnotesize] at (axis cs: 5,2) {
+P: numero di processori\\
+T: tempo CPU\\
+Po=9\\
+To=304};
+\end{axis}
+\end{tikzpicture}
+\caption{Tempi di esecuzione su diverse dimensioni di architetture parallele.}
+
+\vspace{1em}
+
+\begin{tabular}{|c|c|}
+\hline
+numero di & CPU \\
+processori & tempo \\
+\hline
+9 & 304 \\
+16 & 164 \\
+32 & 71 \\
+64 & 33 \\
+\hline
+\end{tabular}
+\end{figure}
+
+Abbiamo uno speed-up "superlineare" dell'algoritmo genetico parallelo, nel senso che moltiplicando il numero di processori per $p$ il tempo di esecuzione \`e diviso per $kp$ $(k>1)$.
+
+\subsection{Confronto con algoritmi di hill-climbing e simulated annealing}
+
+In questa sezione, le prestazioni dell'algoritmo proposto vengono confrontate con algoritmi di hill-climbing e simulated annealing.
+
+\subsubsection{Algoritmo di hill-climbing}
+
+L'algoritmo di hill-climbing inizia con una configurazione casuale e cerca di migliorarla. Il miglioramento viene effettuato in piccoli passi consistenti nel spostare un vertice da un sotto-insieme all'altro. Una mossa viene selezionata casualmente, viene valutato il cambiamento di costo della mossa, e se il cambiamento \`e per il meglio la mossa viene accettata e viene generata una nuova configurazione. Altrimenti, la vecchia configurazione viene mantenuta. Questo processo viene ripetuto fino a quando non ci sono pi\`u cambiamenti alla configurazione che ridurr\`a ulteriormente la funzione di costo. Quando ci\`o si verifica, \`e stato trovato un minimo locale, piuttosto che il minimo globale richiesto. La Figura 7 mostra una versione dell'algoritmo di hill-climbing.
+
+\vspace{1em}
+
+\noindent\textbf{Figura 7: L'algoritmo di hill-climbing.}
+
+\begin{verbatim}
+Generate a random initial state S0 (S:=S0).
+Repeat
+   Compute at random a neighboring state S'.
+   if cost(S') < cost(S) then S:=S'
+Until there is no better neighbor.
+\end{verbatim}
+
+\subsubsection{Algoritmo di simulated annealing}
+
+Il principio dell'algoritmo di simulated annealing \`e il seguente: il sistema viene messo in un ambiente ad alta temperatura. A questa temperatura viene applicata una sequenza sufficientemente lunga di trasformazioni elementari casuali (catena di Markov) per raggiungere l'equilibrio a questa temperatura. Poi, la temperatura viene leggermente diminuita e viene applicata una nuova sequenza di mosse casuali. Ad ogni temperatura gli stati energetici consentiti sono governati dal criterio della metropoli, che permette alla configurazione di accettare uno stato con una probabilit\`a $P(\Delta E,T)$. Il termine di ricerca termina quando il sistema si stabilizza.
+
+C'\`e una grande quantit\`a di letteratura su questo argomento, e l'algoritmo base permette una variazione e ottimizzazione considerevoli dei parametri. La versione che abbiamo considerato \`e una versione semplice, che pu\`o probabilmente essere notevolmente migliorata. Tuttavia, poich\'e l'algoritmo genetico parallelo \`e anche un algoritmo "naive", "out-of-the-shell", la versione che abbiamo pensato fornisce i seguenti benchmark che danno, almeno, un interessante ordine di grandezza.
+
+Il numero di cambiamenti disponibili alla configurazione, denotato da $L$, quando si sposta un vertice in un sotto-insieme diverso, \`e dato da $L=N*(M-1)$, dove $N$ \`e il numero di vertici del grafo da partizionare e $M$ il numero di sotto-insiemi della partizione. Questo valore fornisce una misura della dimensione del problema ed \`e utilizzato come parametro nello schedule di annealing.
+
+\begin{enumerate}
+\item (Passo di inizializzazione)
+\begin{itemize}
+\item iniziare con una configurazione iniziale casuale $S0$ ($S:=S0$);
+\item $T := Tmax$;
+\end{itemize}
+
+\item (Hill-climb stocastico)
+\begin{itemize}
+\item generare e calcolare uno stato vicino casuale $S'$;
+\item $\Delta E:=\text{cost}(S')-\text{cost}(S)$
+\item selezionare la nuova configurazione ($S:=S'$) con probabilit\`a $P(\Delta E,T):=\min(1,\exp(-\Delta E/T))$;
+\item ripetere questo passo $X*N*(M-1)$ volte; /* lunghezza della catena di markov tenuta ad ogni T */
+\end{itemize}
+
+\item (Test di anneal/convergenza)
+\begin{itemize}
+\item impostare $T:=aT$;
+\item se $T \geq Tmin$ andare a step2.
+\end{itemize}
+\end{enumerate}
+
+\textbf{Figura 8} L'algoritmo di simulated annealing.
+
+\subsubsection{Protocollo sperimentale e risultati}
+
+Ogni algoritmo \`e stato eseguito 10 volte per ottenere una stima media delle prestazioni. Gli esperimenti sono stati eseguiti su due problemi diversi:
+\begin{itemize}
+\item una pipeline di 32 vertici da partizionare in 8 sotto-insiemi;
+\item e una griglia di 64 vertici da partizionare in 4 sotto-insiemi.
+\end{itemize}
+
+Per l'algoritmo genetico, utilizziamo una popolazione di 64 configurazioni in esecuzione su un toro 8 per 8 di processori. Lo schedule di annealing e i parametri dell'algoritmo genetico che sono stati utilizzati durante i nostri esperimenti sono dati dalla tabella 1 e 2.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|l|}
+\hline
+Simbolo & Valore & Descrizione \\
+\hline
+Tmax & 10 & Temperatura iniziale \\
+Tmin & 0.1 & Temperatura minima \\
+a & 0.9 & Tasso di decadimento della temperatura \\
+X & 2 & Lunghezza della catena di markov \\
+\hline
+\end{tabular}
+\caption{Lo schedule di annealing.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|l|}
+\hline
+Simbolo & Valore & Descrizione \\
+\hline
+POPS & 64 & Dimensione della popolazione \\
+Pc & 1 & Probabilit\`a di crossover \\
+Pm & 65 & Probabilit\`a di mutazione \\
+\hline
+\end{tabular}
+\caption{Parametri dell'algoritmo genetico.}
+\end{table}
+
+Le tabelle seguenti mostrano il valore minimo, massimo, medio e la varianza delle soluzioni ottenute. I risultati per l'hill-climbing e gli algoritmi di simulated annealing sono basati su un'implementazione su un singolo transputer T800.
+
+Si pu\`o osservare dalle tabelle 3 e 4 che l'algoritmo genetico supera gli algoritmi di hill-climbing e simulated annealing sia nella qualit\`a della soluzione che nel tempo utilizzato nella ricerca.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|c|c|}
+\hline
+Algoritmo & \multicolumn{4}{c|}{Soluzione} & Tempo CPU \\
+ & min & max & mean & deviation & (sec) \\
+\hline
+Hill-climbing & 7.5 & 12.5 & 9.9 & 1.94 & 353 \\
+Simulated annealing & 7.5 & 9 & 8.05 & 0.37 & 2296 \\
+Algoritmo genetico & 7 & 8 & 7.5 & 0.15 & 64 \\
+\hline
+\end{tabular}
+\caption{Benchmarking con una pipeline di 32 vertici e una partizione di 8 sotto-insiemi.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|c|c|}
+\hline
+Algoritmo & \multicolumn{4}{c|}{Soluzione} & Tempo CPU \\
+ & min & max & mean & deviation & (sec) \\
+\hline
+Hill-climbing & 24 & 47 & 32.9 & 42.49 & 643 \\
+Simulated annealing & 21 & 27 & 24 & 4.00 & 3358 \\
+Algoritmo genetico & 17 & 25 & 21 & 6.25 & 93 \\
+\hline
+\end{tabular}
+\caption{Benchmarking con una griglia di 64 vertici e una partizione di 4 sotto-insiemi.}
+\end{table}
+
+Per il simulated annealing, i migliori risultati possono essere ottenuti utilizzando valori pi\`u grandi di $X$, tuttavia, aumentare $X$ aumenter\`a il tempo di calcolo.
+
+\section{CONCLUSIONI E DIREZIONI FUTURE}
+
+Un algoritmo genetico parallelo per risolvere il problema di partizione di grafi \`e stato proposto e valutato.
+
+I risultati principali sono i seguenti:
+\begin{itemize}
+\item l'algoritmo mostra uno speedup superlineare;
+\item \`e facile da programmare;
+\item \`e semplice da implementare su architetture parallele a memoria distribuita massicciamente parallele;
+\item supera gli algoritmi di hill-climbing e simulated annealing sia nella qualit\`a della soluzione che nel tempo utilizzato per raggiungerla.
+\end{itemize}
+
+Una caratteristica importante degli algoritmi genetici \`e che possono essere utilizzati per risolvere una grande variet\`a di problemi di ottimizzazione combinatoria. Li stiamo usando per risolvere tali problemi di ottimizzazione nel campo del controllo robotico e delle reti neurali.
+
+Stiamo anche studiando un miglioramento importante dell'algoritmo, vale a dire, la variazione dinamica dei suoi parametri e in particolare la probabilit\`a di mutazione. L'operatore di crossover diventa meno efficace nel tempo man mano che le stringhe nella popolazione diventano pi\`u simili. Un modo per evitare la convergenza prematura e sostenere la diversit\`a genetica \`e utilizzare la mutazione adattiva. Durante le prime generazioni quando c'\`e ampia diversit\`a nella popolazione, la mutazione deve verificarsi a tassi molto bassi. Tuttavia, man mano che la diversit\`a diminuisce nella popolazione, il tasso di mutazione deve aumentare.
+
+Sono pianificati pi\`u lavori teorici: verr\`a utilizzato un modello basato su automi cellulari per studiare l'influenza dei parametri dell'algoritmo sulla sua convergenza.
+
+\section*{BIBLIOGRAFIA}
+
+\begin{thebibliography}{99}
+
+\bibitem{Ackley87} D.H.Ackley, ``A connectionist machine for genetic hillclimbing'', \emph{Kluwer Academic Pub, Boston}, 1987.
+
+\bibitem{Anderson90} E.J.Anderson, M.C.Ferris, ``A genetic algorithm for the assembly line balancing problem'', Tech. Rep. Rpt.926, University of Wisconsin-Madison, Mar 1990.
+
+\bibitem{Baiardi89} F.Baiardi, S.Orlando, ``Strategies for a massively parallel implementation of simulated annealing'', PARLE'89, LNCS, Vol.366, Eindhoven, Netherlands, pp.272-287, June 1989.
+
+\bibitem{Berman87} F.Berman, L.Snyder, ``On mapping parallel algorithms into parallel architectures'', \emph{J of Parallel and Distributed Computing 4}, pp.439-458, 1987.
+
+\bibitem{Bessiere90} P.Bessiere, ``Toward a synthetic cognitive paradigm: probabilistic inference'', Proc. of COGNITIVA90, Madrid, Spain, 1990.
+
+\bibitem{Bouloutas89} A.Bouloutas, P.M.Gopal, ``Some graph partitioning problems and algorithms related to routing in large computer networks'', \emph{Proc. 9th Int. Conf. on Distributed Computing Systems}, pp.362-370, 1989.
+
+\bibitem{Cohoon87} J.P.Cohoon, S.U.Hedge, W.N.Martin, D.Richards, ``Punctuated Equilibra: A parallel genetic algorithm'', \emph{Proc. of the Second Int. Conf. on Genetic Algorithms}, Cambridge MA, pp.148-154, Jul 1987.
+
+\bibitem{Feo90} T.A.Feo, M.Khellaf, ``A class of bounded approximation algorithms for graph partitioning'', \emph{Networks, Vol.20, No.2}, pp.181-195, Mar 1990.
+
+\bibitem{Garey79} M.R.Garey, D.S.Johnson, ``Computers and intractability: A guide to the theory of NP completeness'', \emph{Freeman, San Francisco}, 1979.
+
+\bibitem{Grefenstette87} J.J.Grefenstette, ``Incorporating problem specific knowledge into genetic algorithms'', \emph{in Genetic algorithms and Simulated annealing, L.Davis ed., Morgan Kaufman Publishers}, 1987.
+
+\bibitem{Haden88} P.Haden, F.Berman, ``A comparative study on mapping algorithms for an automated parallel programming environment'', Tech. Rep., CS-088, Univ. of California, San Diego, 1988.
+
+\bibitem{Herault89} L.H\'erault, J-J.Niez, ``How neural networks can solve the graph K-partitioning'', \emph{Neuro-Nimes'89 Int. Workshop on Neural Networks and applications, Nimes, France}, pp.237-255, Nov 1989.
+
+\bibitem{Holland75} J.H.Holland, ``Adaptation in natural and artificial systems'', \emph{Ann Arbor: Univ. of Michigan Press}, 1975.
+
+\bibitem{Hyafil73} L.Hyafil, R.L.Rivest, ``Graph partitioning and constructing optimal decision trees are polynomial complete problems'', \emph{RR No.33, IRIA, Rocquencourt, France}, Oct 1973.
+
+\bibitem{Jesshope86} C.R.Jesshope, T.Muntean, C.Whitby-strevens, J.G.Harp, ``Supernode Project P1085: Development and application of a low cost high performance multiprocessor machine'', \emph{ESPRIT'86, Brussels}, 1986.
+
+\bibitem{Johnson85} D.S.Johnson, C.H.Papadimitriou, M.Yannakakis, ``How easy is local search ?'', \emph{Proc. Annual Symp. on Foundations of Computer Science}, pp.39-42, 1985.
+
+\bibitem{Kernighan70} B.W.Kernighan, S.Lin, ``An efficient heuristic procedure for partitioning graphs'', \emph{The Bell System Tech. Journal}, pp.291-307, Feb 1970.
+
+\bibitem{Kirkpatrick83} S.Kirkpatrick, C.D.Gelatt, M.P.Vecchi, ``Optimization by simulated annealing'', \emph{Science, Vol.220, No.4598}, pp.671-680, May 1983.
+
+\bibitem{Laarhoven87} P.J.M.Laarhoven, E.H.L.Aarts, ``Simulated annealing: Theory and applications'', \emph{D. Reidel Pub. Comp.}, 1987.
+
+\bibitem{Lawler69} E.L.Lawler, K.N.Levitt, J.Turner, ``Module assignment for delay in digital networks'', \emph{IEEE Trans. on Comp., Vol.C-18, No.1}, pp.47-57, Jan 1969.
+
+\bibitem{Macfarlane90} D.Macfarlane, I.East, ``An investigation of several parallel genetic algorithms'', \emph{Proc. of the Occam User Group, Exeter, UK}, pp.60-67, Apr 1990.
+
+\bibitem{MacGregor78} R.M.MacGregor, ``On partitioning a graph: a heuristic and empirical study'', \emph{Memorandum No.UCB/ERL M78/14, Electronics Research Laboratory, Univ. of California, Berkeley}, 1978.
+
+\bibitem{Muhlenbein88} H.M\"uhlenbein, M.Gorges-schleuter, O.Kr\"amer, ``Evolution algorithms in combinatorial optimization'', Parallel Computing, Vol.7, No.2, pp.65-85, Apr 1988.
+
+\bibitem{Muhlenbein89} H.M\"uhlenbein, J.Kindermann, ``The dynamics of evolution and learning: Towards genetic neural networks'', \emph{in Perspective, R.Pfeifer et al. eds., North-Holland}, pp.173-197, 1989.
+
+\bibitem{Pettey87} C.B.Pettey, M.R.Leuze, J.J.Grefenstette, ``A parallel genetic algorithm'', \emph{Proc. of the Second Int. Conf. on Genetic Algorithms, MIT, Cambridge}, pp.155-161, Jul 1987.
+
+\bibitem{Peretto90} P. Peretto, ``Neural networks and combinatorial optimization'', \emph{Proc. of the international conference on Neural Networks, E.N.S. of Lyon, Lyon, FRANCE}, 1990.
+
+\bibitem{Robertson87} E.Robertson87 P.Robertson, ``Parallel implementation of genetic algorithms in a classifier system'', \emph{in Genetic algorithms and Simulated annealing, L.Davis ed., Morgan Kaufman Publishers}, pp.129-140, 1987.
+
+\bibitem{Russo71} R.L.Russo, P.H.Oden, P.K.Wolff, ``A heuristic procedure for the partitioning and mapping of computer logic graphs'', \emph{IEEE Trans. on Comp., Vol.C-20, No.12}, pp.1455-1462, 1971.
+
+\bibitem{Savage90} J.E.Savage, M.G.Wloka, ``On parallelizing graph-partitioning heuristics'', \emph{Automata, Languages and Programming, Warwick Univ., UK, LNCS No.443}, pp.476-489, Jul 1990.
+
+\bibitem{Shahookar90} K.Shahookar, P.Mazumder, ``A genetic approach to standard cell placement using meta-genetic parameter optimization'', \emph{IEEE Trans. on Computer-Aided Design, Vol.9, No.5}, pp.500-511, May 1990.
+
+\bibitem{Sheild87} J.Sheild, ``Partitioning concurrent VLSI simulation programs onto a multiprocessor by simulated annealing'', \emph{IEE Proceedings, Vol.134, Pt.E, No.1}, pp.24-30, Jan 1987.
+
+\bibitem{Talbi90} E-G.Talbi, T.Muntean, ``Static allocation of communicating processes on a parallel architecture'', \emph{Research Rep. RR-833-I-, LGI/IMAG, INPG}, Nov 1990.
+
+\bibitem{Tanese87} R.Tanese, ``Parallel genetic algorithms for a hypercube'', \emph{Proc. of the Second Int. Conf. on Genetic Algorithms, MIT, Cambridge}, pp.177-183, Jul 1987.
+
+\bibitem{Whitley90} D.Whitley, T.Starkweather, C.Bogart, ``Genetic algorithms and neural networks: optimizing connections and connectivity'', \emph{Parallel Computing, Vol.14, No.3}, pp.347-361, Aug 1990.
+
+\end{thebibliography}
+
+\end{document}
